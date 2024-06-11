@@ -5,8 +5,10 @@ from typing import List, Iterable, Optional, Tuple
 import numpy as np
 import torch
 from torch import nn
-from transformers import CLIPVisionModel, LlavaConfig
+from transformers import CLIPVisionModel, SiglipVisionModel, CLIPVisionConfig, LlavaConfig, Qwen2Config 
 from transformers.models.llava.modeling_llava import LlavaMultiModalProjector
+from vllm.config import CacheConfig
+
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
@@ -18,6 +20,7 @@ from sglang.srt.mm_utils import (
     unpad_image_shape,
 )
 from sglang.srt.models.llama2 import LlamaForCausalLM
+from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 
 
 class LlavaVidForCausalLM(nn.Module):
@@ -33,10 +36,10 @@ class LlavaVidForCausalLM(nn.Module):
         self.config.text_config.hidden_size = config.hidden_size
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.mm_spatial_pool_stride = getattr(self.config, "mm_spatial_pool_stride", 2)
-        self.resampler = nn.AvgPool2d(
-            kernel_size=self.mm_spatial_pool_stride, stride=self.mm_spatial_pool_stride
-        )
-        self.language_model = LlamaForCausalLM(config, quant_config=quant_config)
+        # self.resampler = nn.AvgPool2d(
+        #     kernel_size=self.mm_spatial_pool_stride, stride=self.mm_spatial_pool_stride
+        # )
+        self.language_model = Qwen2ForCausalLM(config, quant_config=quant_config)
         self.num_frames = getattr(self.config, "num_frames", 16)
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
             self.language_model.model.image_newline = nn.Parameter(
@@ -73,36 +76,75 @@ class LlavaVidForCausalLM(nn.Module):
         )
         return new_input_ids, offset
 
-    def encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
-        # NOTE: This is not memory efficient. (output_hidden_states=True) will save all the hidden stated.
-
-        selected_image_feature = image_outputs.hidden_states[self.vision_feature_layer]
-        if self.vision_feature_select_strategy in ["default", "patch"]:
-            selected_image_feature = selected_image_feature[:, 1:]
-        elif self.vision_feature_select_strategy == "full":
-            selected_image_feature = selected_image_feature
-        else:
-            raise ValueError(
-                f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
-            )
-
+    def get_2dPool(self, image_feature):
         height = width = self.num_patches_per_side
-        num_of_frames = selected_image_feature.shape[0]
-        selected_image_feature = selected_image_feature.view(
-            num_of_frames, height, width, -1
-        )
-        selected_image_feature = selected_image_feature.permute(0, 3, 1, 2).contiguous()
-        selected_image_feature = (
-            self.resampler(selected_image_feature)
-            .flatten(2)
-            .transpose(1, 2)
-            .contiguous()
-        )
+        num_frames, num_tokens, num_dim = image_feature.shape
+        image_feature = image_feature.view(num_frames, height, width, -1)
+        image_feature = image_feature.permute(0, 3, 1, 2).contiguous()
+        # image_feature = nn.functional.max_pool2d(image_feature, self.config.mm_spatial_pool_stride)
+        if self.config.mm_spatial_pool_mode == "average":
+            image_feature = nn.functional.avg_pool2d(image_feature, self.config.mm_spatial_pool_stride)
+        elif self.config.mm_spatial_pool_mode == "max":
+            image_feature = nn.functional.max_pool2d(image_feature, self.config.mm_spatial_pool_stride)
+        else:
+            raise ValueError(f"Unexpected mm_spatial_pool_mode: {self.config.mm_spatial_pool_mode}")
+        image_feature = image_feature.permute(0, 2, 3, 1)
+        image_feature = image_feature.view(num_frames, -1, num_dim)
+        return image_feature
 
-        image_features = self.multi_modal_projector(selected_image_feature)
+    def encode_images(self, pixel_values, video_idx_in_batch=[], split_sizes=None):
+        image_features = self.vision_tower(images, output_hidden_states=True)
+        if split_sizes is None:
+            split_sizes = [1 for image in images]
+        per_image_features = torch.split(image_features, split_sizes, dim=0) # tuple, (dim_1, 576, 4096)
+        all_image_features = []
+        # import pdb; pdb.set_trace()
 
-        return image_features
+        for idx, img_feat in enumerate(per_image_features):
+            # import pdb; pdb.set_trace()
+            if self.config.mm_pooling_position == "before":
+                if idx in video_idx_in_batch and self.config.mm_spatial_pool_stride > 1:
+                    img_feat = self.get_2dPool(img_feat) # (num_vid*num_frames, 576, 4096) -> (num_vid*num_frames, 144, 4096)
+            # import pdb; pdb.set_trace()
+            img_feat = self.multi_modal_projector(img_feat) # (dim_1_sum, 576, 1024) -> (dim_1_sum, 576, 4096)
+
+            if self.config.mm_pooling_position == "after":
+                if idx in video_idx_in_batch and self.config.mm_spatial_pool_stride > 1:
+                    img_feat = self.multi_modal_projector(img_feat) # (num_vid*num_frames, 576, 4096) -> (num_vid*num_frames, 144, 4096)
+
+            all_image_features.append(img_feat)
+        return all_image_features
+
+    # def encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
+    #     image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+    #     # NOTE: This is not memory efficient. (output_hidden_states=True) will save all the hidden stated.
+
+    #     selected_image_feature = image_outputs.hidden_states[self.vision_feature_layer]
+    #     if self.vision_feature_select_strategy in ["default", "patch"]:
+    #         selected_image_feature = selected_image_feature[:, 1:]
+    #     elif self.vision_feature_select_strategy == "full":
+    #         selected_image_feature = selected_image_feature
+    #     else:
+    #         raise ValueError(
+    #             f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
+    #         )
+
+    #     height = width = self.num_patches_per_side
+    #     num_of_frames = selected_image_feature.shape[0]
+    #     selected_image_feature = selected_image_feature.view(
+    #         num_of_frames, height, width, -1
+    #     )
+    #     selected_image_feature = selected_image_feature.permute(0, 3, 1, 2).contiguous()
+    #     selected_image_feature = (
+    #         self.resampler(selected_image_feature)
+    #         .flatten(2)
+    #         .transpose(1, 2)
+    #         .contiguous()
+    #     )
+
+    #     image_features = self.multi_modal_projector(selected_image_feature)
+
+    #     return image_features
 
     def forward(
         self,
@@ -143,14 +185,13 @@ class LlavaVidForCausalLM(nn.Module):
                         np.concatenate(pixel_values, axis=0),
                         device=self.vision_tower.device,
                     )
-                    # image_features = self.encode_images(concat_images)
-                    # split_sizes = [image.shape[0] for image in pixel_values]
-                    # image_features = torch.split(image_features, split_sizes, dim=0)
+
+                    split_sizes = [image.shape[0] for image in images_list]
                     image_features = self.encode_images(
                         concat_images
                     )  # , prompts)#, image_counts, long_video=long_video)
-                    split_sizes = [image.shape[0] for image in pixel_values]
-                    image_features = torch.split(image_features, split_sizes, dim=0)
+                    # split_sizes = [image.shape[0] for image in pixel_values]
+                    # image_features = torch.split(image_features, split_sizes, dim=0)
 
                     # hd image_features: BS, num_patch, 576, 4096
                 else:
@@ -163,7 +204,17 @@ class LlavaVidForCausalLM(nn.Module):
 
                 new_image_features = []
                 for image_idx, image_feature in enumerate(image_features):
-                    new_image_features.append(image_feature.flatten(0, 1))
+                    #     new_image_features.append(image_feature.flatten(0, 1))
+                    # image_features = new_image_features
+                    # Grid-wise
+                    resize_h = int(math.sqrt(image_feature.shape[1]))
+                    num_frames = image_feature.shape[0]
+                    image_feature = image_feature.view(num_frames, 1, resize_h, resize_h, -1)
+                    image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
+                    image_feature = image_feature.flatten(1, 2).flatten(2, 3)
+                    image_feature = torch.cat((image_feature, self.model.image_newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.device)), dim=-1)
+                    image_feature = image_feature.flatten(1, 2).transpose(0, 1)
+                    new_image_features.append(image_feature)
                 image_features = new_image_features
 
                 extend_start_loc_cpu = input_metadata.extend_start_loc.cpu().numpy()
@@ -202,10 +253,13 @@ class LlavaVidForCausalLM(nn.Module):
         # load clip vision model by cfg['mm_vision_tower']:
         #   huggingface_name or path_of_clip_relative_to_llava_model_dir
         vision_path = self.config.mm_vision_tower
-        self.vision_tower = CLIPVisionModel.from_pretrained(
+        self.vision_tower = SiglipVisionModel.from_pretrained(
             vision_path, torch_dtype=torch.float16
         ).cuda()
-        self.vision_tower.eval()
+        # self.vision_tower = CLIPVisionModel.from_pretrained(
+        #     vision_path, torch_dtype=torch.float16
+        # ).cuda()
+        # self.vision_tower.eval()
 
         self.vision_feature_layer = self.config.mm_vision_select_layer
         self.vision_feature_select_strategy = self.config.mm_vision_select_feature
@@ -262,6 +316,7 @@ class LlavaVidForCausalLM(nn.Module):
 
 
 first_call = True
+
 
 
 def clip_vision_embed_forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
