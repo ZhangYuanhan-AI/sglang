@@ -2,6 +2,7 @@
 
 import argparse
 import dataclasses
+import random
 from typing import List, Optional, Union
 
 
@@ -71,6 +72,9 @@ class ServerArgs:
             self.additional_ports = [self.additional_ports]
         elif self.additional_ports is None:
             self.additional_ports = []
+
+        if self.random_seed is None:
+            self.random_seed = random.randint(0, 1 << 30)
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -194,7 +198,7 @@ class ServerArgs:
             "--random-seed",
             type=int,
             default=ServerArgs.random_seed,
-            help="The global random seed of the server.",
+            help="Random seed.",
         )
         parser.add_argument(
             "--log-level",
