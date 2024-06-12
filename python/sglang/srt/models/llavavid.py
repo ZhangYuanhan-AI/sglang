@@ -22,6 +22,8 @@ from sglang.srt.mm_utils import (
 from sglang.srt.models.llama2 import LlamaForCausalLM
 from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 
+import math
+
 
 class LlavaVidForCausalLM(nn.Module):
     def __init__(
@@ -40,11 +42,13 @@ class LlavaVidForCausalLM(nn.Module):
         #     kernel_size=self.mm_spatial_pool_stride, stride=self.mm_spatial_pool_stride
         # )
         self.language_model = Qwen2ForCausalLM(config, quant_config=quant_config)
-        self.num_frames = getattr(self.config, "num_frames", 16)
+        self.num_frames = getattr(self.config, "num_frames", 32)
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
             self.language_model.model.image_newline = nn.Parameter(
                 torch.empty(config.text_config.hidden_size, dtype=torch.float16)
             )
+        if getattr(self.config, "image_token_index", None) is None:
+            self.config.image_token_index = 151646
 
     def pad_input_ids(self, input_ids, pad_value, pt_shape=None, image_size=None):
         new_image_feature_len = self.image_feature_len
@@ -67,6 +71,7 @@ class LlavaVidForCausalLM(nn.Module):
         pad_ids = pad_value * (
             (new_image_feature_len + len(pad_value)) // len(pad_value)
         )
+        print(input_ids)
         offset = input_ids.index(self.config.image_token_index)
         # old_len + pad_len - 1, because we need to remove image_token_id
         new_input_ids = (
@@ -92,25 +97,37 @@ class LlavaVidForCausalLM(nn.Module):
         image_feature = image_feature.view(num_frames, -1, num_dim)
         return image_feature
 
-    def encode_images(self, pixel_values, video_idx_in_batch=[], split_sizes=None):
-        image_features = self.vision_tower(images, output_hidden_states=True)
+    def encode_images(self, images, video_idx_in_batch=[], split_sizes=None):
+
+        image_outputs = self.vision_tower(images, output_hidden_states=True)
+
+        selected_image_feature = image_outputs.hidden_states[-1]
+        # if self.vision_feature_select_strategy in ["default", "patch"]:
+        #     selected_image_feature = selected_image_feature[:, 1:]
+        # elif self.vision_feature_select_strategy == "full":
+        #     selected_image_feature = selected_image_feature
+        # else:
+        #     raise ValueError(
+        #         f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
+        #     )
+
         if split_sizes is None:
             split_sizes = [1 for image in images]
-        per_image_features = torch.split(image_features, split_sizes, dim=0) # tuple, (dim_1, 576, 4096)
+        per_image_features = torch.split(selected_image_feature, split_sizes, dim=0) # tuple, (dim_1, 576, 4096)
         all_image_features = []
         # import pdb; pdb.set_trace()
 
         for idx, img_feat in enumerate(per_image_features):
             # import pdb; pdb.set_trace()
             if self.config.mm_pooling_position == "before":
-                if idx in video_idx_in_batch and self.config.mm_spatial_pool_stride > 1:
+                if self.config.mm_spatial_pool_stride > 1:
                     img_feat = self.get_2dPool(img_feat) # (num_vid*num_frames, 576, 4096) -> (num_vid*num_frames, 144, 4096)
             # import pdb; pdb.set_trace()
             img_feat = self.multi_modal_projector(img_feat) # (dim_1_sum, 576, 1024) -> (dim_1_sum, 576, 4096)
 
             if self.config.mm_pooling_position == "after":
                 if idx in video_idx_in_batch and self.config.mm_spatial_pool_stride > 1:
-                    img_feat = self.multi_modal_projector(img_feat) # (num_vid*num_frames, 576, 4096) -> (num_vid*num_frames, 144, 4096)
+                    img_feat = self.get_2dPool(img_feat) # (num_vid*num_frames, 576, 4096) -> (num_vid*num_frames, 144, 4096)
 
             all_image_features.append(img_feat)
         return all_image_features
@@ -186,12 +203,8 @@ class LlavaVidForCausalLM(nn.Module):
                         device=self.vision_tower.device,
                     )
 
-                    split_sizes = [image.shape[0] for image in images_list]
-                    image_features = self.encode_images(
-                        concat_images
-                    )  # , prompts)#, image_counts, long_video=long_video)
-                    # split_sizes = [image.shape[0] for image in pixel_values]
-                    # image_features = torch.split(image_features, split_sizes, dim=0)
+                    split_sizes = [image.shape[0] for image in pixel_values]
+                    image_features = self.encode_images(concat_images,split_sizes=split_sizes) 
 
                     # hd image_features: BS, num_patch, 576, 4096
                 else:
@@ -207,12 +220,13 @@ class LlavaVidForCausalLM(nn.Module):
                     #     new_image_features.append(image_feature.flatten(0, 1))
                     # image_features = new_image_features
                     # Grid-wise
+                    # print(image_feature.shape)
                     resize_h = int(math.sqrt(image_feature.shape[1]))
                     num_frames = image_feature.shape[0]
                     image_feature = image_feature.view(num_frames, 1, resize_h, resize_h, -1)
                     image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
                     image_feature = image_feature.flatten(1, 2).flatten(2, 3)
-                    image_feature = torch.cat((image_feature, self.model.image_newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.device)), dim=-1)
+                    image_feature = torch.cat((image_feature, self.language_model.model.image_newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.device)), dim=-1)
                     image_feature = image_feature.flatten(1, 2).transpose(0, 1)
                     new_image_features.append(image_feature)
                 image_features = new_image_features

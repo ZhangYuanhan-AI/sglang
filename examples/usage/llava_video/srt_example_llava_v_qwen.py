@@ -20,6 +20,7 @@ def single(path, num_frames=16):
         video_path=path,
         question="Please provide a detailed description of the video, focusing on the main subjects, their actions, the background scenes",
         temperature=0.0,
+        top_p=1.0, 
         max_new_tokens=1024,
     )
     print(state["answer"], "\n")
@@ -116,13 +117,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run video processing with specified port.')
 
     # Add an argument for the port
-    parser.add_argument('--port', type=int, default=30000, help='The master port for distributed serving.')
+    parser.add_argument('--port', type=int, default=8000, help='The master port for distributed serving.')
     parser.add_argument('--chunk-idx', type=int, default=0, help='The index of the chunk to process.')
     parser.add_argument('--num-chunks', type=int, default=8, help='The number of chunks to process.')
     parser.add_argument('--save-dir', type=str, default="./work_dirs/llava_video", help='The directory to save the processed video files.')
     parser.add_argument('--video-dir', type=str, default="./videos/Q98Z4OTh8RwmDonc.mp4", help='The directory or path for the processed video files.')
     parser.add_argument('--model-path', type=str, default="lmms-lab/LLaVA-NeXT-Video-7B", help='The model path for the video processing.')
-    parser.add_argument('--num-frames', type=int, default=16, help='The number of frames to process in each video.' )
+    parser.add_argument('--num-frames', type=int, default=32, help='The number of frames to process in each video.' )
     parser.add_argument('--tokenizer-path', type=str, default="lmms-lab/llavanext-qwen-tokenizer", help='The tokenizer path for the video processing.')
     parser.add_argument("--mm_spatial_pool_stride", type=int, default=2)
 
@@ -145,8 +146,7 @@ if __name__ == "__main__":
     model_overide_args["architectures"] = ["LlavaVidForCausalLM"]
     model_overide_args["num_frames"] = args.num_frames
 
-    # if "34b" in args.model_path.lower():
-    #     model_overide_args["image_token_index"] = 64002
+    model_overide_args["image_token_index"] = 151646
 
 
     # if args.num_frames == 32:

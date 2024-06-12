@@ -154,7 +154,10 @@ def encode_video_base64(video_path, num_frames=16):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     print(f"target_frames: {num_frames}")
 
-    frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+    if total_frames > num_frames:
+        frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+    else:
+        frame_indices = np.linspace(0, total_frames - 1, total_frames, dtype=int)
 
     frames = []
     for i in range(total_frames):

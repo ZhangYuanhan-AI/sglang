@@ -74,6 +74,8 @@ class TokenizerManager:
                 tokenizer_mode=server_args.tokenizer_mode,
                 trust_remote_code=server_args.trust_remote_code,
             )
+            print(self.processor)
+            # print(server_args.tokenizer_path)
             self.tokenizer = self.processor.tokenizer
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
             self.executor = concurrent.futures.ProcessPoolExecutor(
@@ -378,6 +380,7 @@ def get_pixel_values(
         processor = processor or global_processor
         image, image_size = load_image(image_data)
         if image_size != None:
+            # print(processor.image_processor)
             image_hash = hash(image_data)
             pixel_values = processor.image_processor(image)["pixel_values"]
             for _ in range(len(pixel_values)):
