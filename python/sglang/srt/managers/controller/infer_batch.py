@@ -78,6 +78,7 @@ class Req:
         # For vision input
         self.pixel_values = None
         self.image_size = None
+        self.num_frames = None
         self.image_offset = 0
         self.pad_value = None
 
@@ -235,6 +236,7 @@ class Batch:
     # for multimodal
     pixel_values: List[torch.Tensor] = None
     image_sizes: List[List[int]] = None
+    num_frames: List[List[int]] = None
     image_offsets: List[int] = None
 
     # other arguments for control
@@ -331,6 +333,7 @@ class Batch:
         )
         self.pixel_values = [r.pixel_values for r in reqs]
         self.image_sizes = [r.image_size for r in reqs]
+        self.num_frames = [r.num_frames for r in reqs]
         self.image_offsets = [
             r.image_offset - p_len for r, p_len in zip(reqs, prefix_lens)
         ]
@@ -459,6 +462,7 @@ class Batch:
                             req.origin_input_ids_unpadded,
                             req.pad_value,
                             req.pixel_values.shape,
+                            req.num_frames,
                             req.image_size,
                         )
 

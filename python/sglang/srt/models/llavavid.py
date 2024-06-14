@@ -5,7 +5,7 @@ from typing import List, Iterable, Optional, Tuple
 import numpy as np
 import torch
 from torch import nn
-from transformers import CLIPVisionModel, SiglipVisionModel, CLIPVisionConfig, LlavaConfig, Qwen2Config 
+from transformers import CLIPVisionModel, CLIPVisionConfig, LlavaConfig, Qwen2Config 
 from transformers.models.llava.modeling_llava import LlavaMultiModalProjector
 from vllm.config import CacheConfig
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
@@ -20,9 +20,11 @@ from sglang.srt.mm_utils import (
 )
 from sglang.srt.models.llama2 import LlamaForCausalLM
 from sglang.srt.models.qwen2 import Qwen2ForCausalLM
+from sglang.srt.models.siglip_encoder import SigLipVisionTower,SigLipVisionModel
 
 import math
 
+import os
 
 class LlavaVidForCausalLM(nn.Module):
     def __init__(
@@ -42,7 +44,6 @@ class LlavaVidForCausalLM(nn.Module):
         #     kernel_size=self.mm_spatial_pool_stride, stride=self.mm_spatial_pool_stride
         # )
         self.language_model = Qwen2ForCausalLM(config, quant_config=quant_config)
-        self.num_frames = getattr(self.config, "num_frames", 32)
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
             self.language_model.model.image_newline = nn.Parameter(
                 torch.empty(config.text_config.hidden_size, dtype=torch.float16)
@@ -50,28 +51,13 @@ class LlavaVidForCausalLM(nn.Module):
         if getattr(self.config, "image_token_index", None) is None:
             self.config.image_token_index = 151646
 
-    def pad_input_ids(self, input_ids, pad_value, pt_shape=None, image_size=None):
-        new_image_feature_len = self.image_feature_len
-        # now only support spatial_unpad + anyres
-        # if self.mm_patch_merge_type.startswith("spatial"):
-        #     height = width = self.num_patches_per_side
-        #     if pt_shape[0] > 1:
-        #         if self.image_aspect_ratio == "anyres":
-        #             num_patch_width, num_patch_height = get_anyres_image_grid_shape(
-        #                 image_size,
-        #                 self.image_grid_pinpoints,
-        #                 self.vision_tower.config.image_size,
-        #             )
-        #         if "unpad" in self.mm_patch_merge_type:
-        #             h = num_patch_height * height
-        #             w = num_patch_width * width
-        #             new_h, new_w = unpad_image_shape(h, w, image_size)
-        #             new_image_feature_len += new_h * (new_w + 1)
+    def pad_input_ids(self, input_ids, pad_value, pt_shape=None, num_frames=None, image_size=None):
+        new_image_feature_len = self.image_feature_len(num_frames=num_frames)
 
         pad_ids = pad_value * (
             (new_image_feature_len + len(pad_value)) // len(pad_value)
         )
-        print(input_ids)
+        # print(input_ids)
         offset = input_ids.index(self.config.image_token_index)
         # old_len + pad_len - 1, because we need to remove image_token_id
         new_input_ids = (
@@ -99,17 +85,9 @@ class LlavaVidForCausalLM(nn.Module):
 
     def encode_images(self, images, video_idx_in_batch=[], split_sizes=None):
 
-        image_outputs = self.vision_tower(images, output_hidden_states=True)
+        image_outputs = self.vision_tower(images)
 
-        selected_image_feature = image_outputs.hidden_states[-1]
-        # if self.vision_feature_select_strategy in ["default", "patch"]:
-        #     selected_image_feature = selected_image_feature[:, 1:]
-        # elif self.vision_feature_select_strategy == "full":
-        #     selected_image_feature = selected_image_feature
-        # else:
-        #     raise ValueError(
-        #         f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
-        #     )
+        selected_image_feature = image_outputs #.hidden_states[-1]
 
         if split_sizes is None:
             split_sizes = [1 for image in images]
@@ -132,37 +110,6 @@ class LlavaVidForCausalLM(nn.Module):
             all_image_features.append(img_feat)
         return all_image_features
 
-    # def encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
-    #     image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
-    #     # NOTE: This is not memory efficient. (output_hidden_states=True) will save all the hidden stated.
-
-    #     selected_image_feature = image_outputs.hidden_states[self.vision_feature_layer]
-    #     if self.vision_feature_select_strategy in ["default", "patch"]:
-    #         selected_image_feature = selected_image_feature[:, 1:]
-    #     elif self.vision_feature_select_strategy == "full":
-    #         selected_image_feature = selected_image_feature
-    #     else:
-    #         raise ValueError(
-    #             f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
-    #         )
-
-    #     height = width = self.num_patches_per_side
-    #     num_of_frames = selected_image_feature.shape[0]
-    #     selected_image_feature = selected_image_feature.view(
-    #         num_of_frames, height, width, -1
-    #     )
-    #     selected_image_feature = selected_image_feature.permute(0, 3, 1, 2).contiguous()
-    #     selected_image_feature = (
-    #         self.resampler(selected_image_feature)
-    #         .flatten(2)
-    #         .transpose(1, 2)
-    #         .contiguous()
-    #     )
-
-    #     image_features = self.multi_modal_projector(selected_image_feature)
-
-    #     return image_features
-
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -170,6 +117,7 @@ class LlavaVidForCausalLM(nn.Module):
         input_metadata: InputMetadata,
         pixel_values: Optional[List[Optional[np.array]]] = None,
         image_sizes: Optional[List[List[int]]] = None,
+        num_frames: Optional[List[List[int]]] = None,
         image_offsets: Optional[List[int]] = None,
     ) -> torch.Tensor:
         if input_metadata.forward_mode == ForwardMode.EXTEND:
@@ -180,7 +128,7 @@ class LlavaVidForCausalLM(nn.Module):
 
             # Embed vision input
             need_vision = (
-                (positions[input_metadata.extend_start_loc] < self.image_feature_len)
+                (positions[input_metadata.extend_start_loc] < self.image_feature_len(num_frames[0]))
                 .cpu()
                 .numpy()
             )
@@ -244,6 +192,7 @@ class LlavaVidForCausalLM(nn.Module):
                         pad_dim == dim
                     ), "invalid pad_dim={}, input_embed_dim={}!".format(pad_dim, dim)
                     # Fill in the placeholder for the image
+                    # sudo_pad_len = self.image_feature_len
                     try:
                         input_embeds[
                             start_idx
@@ -267,13 +216,16 @@ class LlavaVidForCausalLM(nn.Module):
         # load clip vision model by cfg['mm_vision_tower']:
         #   huggingface_name or path_of_clip_relative_to_llava_model_dir
         vision_path = self.config.mm_vision_tower
-        self.vision_tower = SiglipVisionModel.from_pretrained(
-            vision_path, torch_dtype=torch.float16
-        ).cuda()
+        self.vision_tower = SigLipVisionTower(vision_path,{"none"},delay_load=True)
+        self.vision_tower.vision_tower = SigLipVisionModel.from_pretrained(vision_path).cuda()
+        # self.vision_tower = SigLipVisionModel.from_pretrained(vision_path).cuda()
+        del self.vision_tower.vision_tower.vision_model.encoder.layers[-1:]
+        self.vision_tower.vision_tower.vision_model.head = nn.Identity()
+        self.vision_tower.vision_tower.requires_grad_(False)
         # self.vision_tower = CLIPVisionModel.from_pretrained(
         #     vision_path, torch_dtype=torch.float16
         # ).cuda()
-        # self.vision_tower.eval()
+        self.vision_tower.vision_tower.eval()
 
         self.vision_feature_layer = self.config.mm_vision_select_layer
         self.vision_feature_select_strategy = self.config.mm_vision_select_feature
@@ -284,24 +236,13 @@ class LlavaVidForCausalLM(nn.Module):
         self.image_aspect_ratio = getattr(self.config, "image_aspect_ratio", "square")
         self.image_grid_pinpoints = getattr(self.config, "image_grid_pinpoints", None)
 
-        print(f"target_frames: {self.num_frames}")
-        self.image_feature_len = self.num_frames * int(
-            (self.image_size / self.patch_size / self.mm_spatial_pool_stride) ** 2
-        )
-        if self.vision_feature_select_strategy == "patch":
-            pass
-        elif self.vision_feature_select_strategy == "cls_patch":
-            self.image_feature_len += 1
-        else:
-            raise ValueError(f"Unexpected select feature: {self.select_feature}")
-
         # load mm_projector
         projector_weights = {
             "model.mm_projector.0": "multi_modal_projector.linear_1",
             "model.mm_projector.2": "multi_modal_projector.linear_2",
             "model.vision_resampler.mm_projector.0": "multi_modal_projector.linear_1",
             "model.vision_resampler.mm_projector.2": "multi_modal_projector.linear_2",
-            "model.vision_tower.vision_tower": "vision_tower",  # Update the vision tower weights if we find them in the checkpoint (it may be finetuned).
+            "model.vision_tower.vision_tower": "vision_tower.vision_tower",  # Update the vision tower weights if we find them in the checkpoint (it may be finetuned).
         }
         params_dict = dict(self.named_parameters())
         weights = list(weights)
@@ -327,6 +268,12 @@ class LlavaVidForCausalLM(nn.Module):
     @property
     def num_patches_per_side(self):
         return self.image_size // self.patch_size
+
+    def image_feature_len(self,num_frames=None):
+        num_frames = num_frames if num_frames is not None else 32
+        # print(f"num_frames: {num_frames}")
+        return num_frames * int((self.image_size / self.patch_size / self.mm_spatial_pool_stride)) * int((self.image_size / self.patch_size / self.mm_spatial_pool_stride)+1)
+
 
 
 first_call = True

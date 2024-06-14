@@ -339,11 +339,12 @@ def decode_video_base64(video_base64):
 
     # Ensure there's at least one frame to avoid errors with np.stack
     if frames:
-        return np.stack(frames, axis=0), img.size
+        return np.stack(frames, axis=0), img.size, len(frames)
     else:
         return np.array([]), (
             0,
             0,
+            0
         )  # Return an empty array and size tuple if no frames were found
 
 
@@ -351,6 +352,8 @@ def load_image(image_file):
     from PIL import Image
 
     image = image_size = None
+
+    num_frames = 1
 
     if image_file.startswith("http://") or image_file.startswith("https://"):
         timeout = int(os.getenv("REQUEST_TIMEOUT", "3"))
@@ -363,11 +366,11 @@ def load_image(image_file):
         image = Image.open(BytesIO(base64.b64decode(image_file)))
     elif image_file.startswith("video:"):
         image_file = image_file.replace("video:", "")
-        image, image_size = decode_video_base64(image_file)
+        image, image_size, num_frames = decode_video_base64(image_file)
     else:
         image = Image.open(BytesIO(base64.b64decode(image_file)))
 
-    return image, image_size
+    return image, image_size, num_frames
 
 
 def init_rpyc_service(service: rpyc.Service, port: int):

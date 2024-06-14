@@ -10,6 +10,7 @@ from huggingface_hub import snapshot_download
 from transformers import (
     AutoConfig,
     AutoProcessor,
+    AutoImageProcessor,
     AutoTokenizer,
     PreTrainedTokenizer,
     PreTrainedTokenizerFast,
@@ -173,6 +174,9 @@ def get_processor(
         tokenizer_revision=tokenizer_revision,
         **kwargs,
     )
+    ### Hard code
+    processor.image_processor = AutoImageProcessor.from_pretrained("google/siglip-so400m-patch14-384")
+    # processor.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-7B-Chat")
     return processor
 
 

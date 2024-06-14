@@ -101,6 +101,7 @@ class TokenizedGenerateReqInput:
     pixel_values: List[float]
     image_hash: int
     image_size: List[int]
+    num_frames: List[int]
     sampling_params: SamplingParams
     return_logprob: bool
     logprob_start_len: int

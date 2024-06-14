@@ -134,8 +134,6 @@ def encode_frame(frame):
     # Convert to bytes
     buffered = BytesIO()
 
-    # frame_format = str(os.getenv('FRAME_FORMAT', "JPEG"))
-
     im_pil.save(buffered, format="PNG")
 
     frame_bytes = buffered.getvalue()
@@ -144,7 +142,7 @@ def encode_frame(frame):
     return frame_bytes
 
 
-def encode_video_base64(video_path, num_frames=16):
+def encode_video_base64(video_path, num_frames=32):
     import cv2  # pip install opencv-python-headless
 
     cap = cv2.VideoCapture(video_path)
@@ -152,12 +150,18 @@ def encode_video_base64(video_path, num_frames=16):
         raise IOError(f"Could not open video file:{video_path}")
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"target_frames: {num_frames}")
 
-    if total_frames > num_frames:
+    fps = round(cap.get(cv2.CAP_PROP_FPS))
+    
+    frame_idx = [i for i in range(0, total_frames, fps)]
+
+    print(f"upperbound frames number: {num_frames}")
+
+
+    if len(frame_idx) > num_frames:
         frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
     else:
-        frame_indices = np.linspace(0, total_frames - 1, total_frames, dtype=int)
+        frame_indices = frame_idx
 
     frames = []
     for i in range(total_frames):
@@ -174,9 +178,12 @@ def encode_video_base64(video_path, num_frames=16):
     # Safely select frames based on frame_indices, avoiding IndexError
     frames = [frames[i] for i in frame_indices if i < len(frames)]
 
+    # os.environ['FRAMES_LENGTH'] = str(len(frames))
+
+    print(f"actual frame length: {len(frames)}")
     # If there are not enough frames, duplicate the last frame until we reach the target
-    while len(frames) < num_frames:
-        frames.append(frames[-1])
+    # while len(frames) < num_frames:
+    #     frames.append(frames[-1])
 
     # Use ThreadPoolExecutor to process and encode frames in parallel
     with ThreadPoolExecutor() as executor:

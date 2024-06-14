@@ -8,17 +8,20 @@ import csv
 import time
 import argparse
 
+from sglang.lang.chat_template import get_chat_template
+
+
 @sgl.function
 def video_qa(s, num_frames, video_path, question):
     s += sgl.user(sgl.video(video_path,num_frames) + question)
     s += sgl.assistant(sgl.gen("answer"))
 
 
-def single(path, num_frames=16):
+def single(path, num_frames=32):
     state = video_qa.run(
         num_frames=num_frames,
         video_path=path,
-        question="Please provide a detailed description of the video, focusing on the main subjects, their actions, the background scenes",
+        question="Please provide a detailed description of the video, focusing on the main subjects, their actions, the background scenes.",
         temperature=0.0,
         top_p=1.0, 
         max_new_tokens=1024,
@@ -111,6 +114,7 @@ def batch(video_dir, save_dir, cur_chunk, num_chunks, num_frames=16, batch_size=
     compile_and_cleanup_final_results(cur_chunk, num_batches, save_dir)
 
 
+
 if __name__ == "__main__":
 
     # Create the parser
@@ -149,6 +153,7 @@ if __name__ == "__main__":
     model_overide_args["image_token_index"] = 151646
 
 
+
     # if args.num_frames == 32:
     #     model_overide_args["rope_scaling"] = {"factor": 2.0, "type": "linear"}
     #     model_overide_args["max_sequence_length"] = 4096 * 2
@@ -168,10 +173,9 @@ if __name__ == "__main__":
         model_overide_args=model_overide_args,
         tp_size=1
     )
+    # runtime.endpoint.chat_template = get_chat_template("qwen-llava")
     sgl.set_default_backend(runtime)
     print(f"chat template: {runtime.endpoint.chat_template.name}")
-
-
     # Run a single request
     # try:
     print("\n========== single ==========\n")

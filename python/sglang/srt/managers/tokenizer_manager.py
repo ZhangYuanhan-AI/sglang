@@ -140,15 +140,15 @@ class TokenizerManager:
                 sampling_params.verify()
 
             if isinstance(obj.image_data, list) and len(obj.image_data) > 0:
-                pixel_values, image_hash, image_size = await self.get_pixel_values(
+                pixel_values, image_hash, image_size,num_frames = await self.get_pixel_values(
                     obj.image_data[0]
                 )
             elif isinstance(obj.image_data, str):
-                pixel_values, image_hash, image_size = await self.get_pixel_values(
+                pixel_values, image_hash, image_size,num_frames = await self.get_pixel_values(
                     obj.image_data
                 )
             else:
-                pixel_values, image_hash, image_size = None, None, None
+                pixel_values, image_hash, image_size, num_frames = None, None, None, None
             tokenized_obj = TokenizedGenerateReqInput(
                 rid=rid,
                 input_text=obj.text,
@@ -156,6 +156,7 @@ class TokenizerManager:
                 pixel_values=pixel_values,
                 image_hash=image_hash,
                 image_size=image_size,
+                num_frames=num_frames,
                 sampling_params=sampling_params,
                 return_logprob=obj.return_logprob,
                 logprob_start_len=obj.logprob_start_len,
@@ -222,9 +223,9 @@ class TokenizerManager:
                     sampling_params.normalize(self.tokenizer)
                     sampling_params.verify()
                 if obj.image_data[i] is None:
-                    pixel_values, image_hash, image_size = None, None, None
+                    pixel_values, image_hash, image_size, num_frames = None, None, None, None
                 else:
-                    pixel_values, image_hash, image_size = await self.get_pixel_values(
+                    pixel_values, image_hash, image_size, num_frames = await self.get_pixel_values(
                         obj.image_data[i]
                     )
                 tokenized_obj = TokenizedGenerateReqInput(
@@ -234,6 +235,7 @@ class TokenizerManager:
                     pixel_values=pixel_values,
                     image_hash=image_hash,
                     image_size=image_size,
+                    num_frames=num_frames,
                     sampling_params=sampling_params,
                     return_logprob=obj.return_logprob[i],
                     logprob_start_len=obj.logprob_start_len[i],
@@ -384,7 +386,7 @@ def get_pixel_values(
 ):
     try:
         processor = processor or global_processor
-        image, image_size = load_image(image_data)
+        image, image_size, num_frames = load_image(image_data)
         if image_size != None:
             # print(processor.image_processor)
             image_hash = hash(image_data)
@@ -392,7 +394,7 @@ def get_pixel_values(
             for _ in range(len(pixel_values)):
                 pixel_values[_] = pixel_values[_].astype(np.float16)
             pixel_values = np.stack(pixel_values, axis=0)
-            return pixel_values, image_hash, image_size
+            return pixel_values, image_hash, image_size, num_frames
         else:
             image_hash = hash(image_data)
             if image_aspect_ratio == "pad":
@@ -408,6 +410,6 @@ def get_pixel_values(
             else:
                 pixel_values = processor.image_processor(image)["pixel_values"][0]
             pixel_values = pixel_values.astype(np.float16)
-            return pixel_values, image_hash, image.size
+            return pixel_values, image_hash, image.size, num_frames
     except Exception:
         print("Exception in TokenizerManager:\n" + get_exception_traceback())

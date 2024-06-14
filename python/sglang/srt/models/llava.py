@@ -42,7 +42,7 @@ class LlavaLlamaForCausalLM(nn.Module):
                 torch.empty(config.text_config.hidden_size, dtype=torch.float16)
             )
 
-    def pad_input_ids(self, input_ids, pad_value, pt_shape=None, image_size=None):
+    def pad_input_ids(self, input_ids, pad_value, pt_shape=None, num_frames=None, image_size=None):
         new_image_feature_len = self.image_feature_len
         # now only support spatial_unpad + anyres
         if self.mm_patch_merge_type.startswith("spatial"):

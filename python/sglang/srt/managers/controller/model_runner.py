@@ -415,6 +415,7 @@ class ModelRunner:
             input_metadata,
             batch.pixel_values,
             batch.image_sizes,
+            batch.num_frames,
             batch.image_offsets,
         )
 

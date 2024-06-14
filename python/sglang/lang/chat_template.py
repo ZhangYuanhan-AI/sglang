@@ -6,6 +6,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 class ChatTemplateStyle(Enum):
     PLAIN = auto()
     LLAMA2 = auto()
+    CHATML = auto()
 
 
 @dataclass
@@ -129,6 +130,21 @@ register_chat_template(
         style=ChatTemplateStyle.PLAIN,
         stop_str=("<|im_end|>",),
         image_token=" <image>\n",
+    )
+)
+
+register_chat_template(
+    ChatTemplate(
+        name="qwen-llava",
+        default_system_prompt="You are a helpful assistant.",
+        role_prefix_and_suffix={
+            "system": ("<|im_start|>system\n", "<|im_end|>\n"),
+            "user": ("<|im_start|>user\n", "<|im_end|>\n"),
+            "assistant": ("<|im_start|>assistant\n", "<|im_end|>\n"),
+        },
+        style=ChatTemplateStyle.CHATML,
+        stop_str=("<|im_end|>",),
+        image_token="<image>\n",
     )
 )
 
@@ -291,6 +307,8 @@ def match_chat_ml(model_path: str):
         return get_chat_template("chatml")
     if "qwen" in model_path and "chat" in model_path:
         return get_chat_template("chatml")
+    if "llavanextvideo-qwen" in model_path:
+        return get_chat_template("qwen-llava")
     if (
         "llava-v1.6-34b" in model_path
         or "llava-v1.6-yi-34b" in model_path

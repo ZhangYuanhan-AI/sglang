@@ -14,7 +14,7 @@ def video_qa(s, num_frames, video_path, question):
     s += sgl.assistant(sgl.gen("answer"))
 
 
-def single(path, num_frames=16):
+def single(path, num_frames=32):
     state = video_qa.run(
         num_frames=num_frames,
         video_path=path,
