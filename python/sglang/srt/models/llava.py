@@ -21,6 +21,8 @@ from sglang.srt.mm_utils import (
 from sglang.srt.models.llama2 import LlamaForCausalLM
 from sglang.srt.models.qwen2 import Qwen2ForCausalLM
 from sglang.srt.models.mistral import MistralForCausalLM
+from sglang.srt.models.siglip_encoder import SigLipVisionTower,SigLipVisionModel
+
 
 
 class LlavaLlamaForCausalLM(nn.Module):
@@ -73,18 +75,19 @@ class LlavaLlamaForCausalLM(nn.Module):
         return new_input_ids, offset
 
     def encode_images(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
+        # image_outputs = self.vision_tower(pixel_values, output_hidden_states=True)
         # NOTE: This is not memory efficient. (output_hidden_states=True) will save all the hidden stated.
+        image_outputs = self.vision_tower(pixel_values)
 
-        selected_image_feature = image_outputs.hidden_states[self.vision_feature_layer]
-        if self.vision_feature_select_strategy in ["default", "patch"]:
-            selected_image_feature = selected_image_feature[:, 1:]
-        elif self.vision_feature_select_strategy == "full":
-            selected_image_feature = selected_image_feature
-        else:
-            raise ValueError(
-                f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
-            )
+        selected_image_feature = image_outputs #image_outputs.hidden_states[self.vision_feature_layer]
+        # if self.vision_feature_select_strategy in ["default", "patch"]:
+        #     selected_image_feature = selected_image_feature[:, 1:]
+        # elif self.vision_feature_select_strategy == "full":
+        #     selected_image_feature = selected_image_feature
+        # else:
+        #     raise ValueError(
+        #         f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
+        #     )
         image_features = self.multi_modal_projector(selected_image_feature)
 
         return image_features
@@ -96,6 +99,7 @@ class LlavaLlamaForCausalLM(nn.Module):
         input_metadata: InputMetadata,
         pixel_values: Optional[List[Optional[np.array]]] = None,
         image_sizes: Optional[List[List[int]]] = None,
+        num_frames: Optional[List[int]] = None,
         image_offsets: Optional[List[int]] = None,
     ) -> torch.Tensor:
         if input_metadata.forward_mode == ForwardMode.EXTEND:
@@ -241,10 +245,17 @@ class LlavaLlamaForCausalLM(nn.Module):
         # load clip vision model by cfg['mm_vision_tower']:
         #   huggingface_name or path_of_clip_relative_to_llava_model_dir
         vision_path = self.config.mm_vision_tower
-        self.vision_tower = CLIPVisionModel.from_pretrained(
-            vision_path, torch_dtype=torch.float16
-        ).cuda()
-        self.vision_tower.eval()
+        # self.vision_tower = CLIPVisionModel.from_pretrained(
+        #     vision_path, torch_dtype=torch.float16
+        # ).cuda()
+        # self.vision_tower.eval()
+
+        self.vision_tower = SigLipVisionTower(vision_path,{"none"},delay_load=True)
+        self.vision_tower.vision_tower = SigLipVisionModel.from_pretrained(vision_path).cuda()
+        # self.vision_tower = SigLipVisionModel.from_pretrained(vision_path).cuda()
+        del self.vision_tower.vision_tower.vision_model.encoder.layers[-1:]
+        self.vision_tower.vision_tower.vision_model.head = nn.Identity()
+        self.vision_tower.vision_tower.requires_grad_(False)
 
         self.vision_feature_layer = self.config.mm_vision_select_layer
         self.vision_feature_select_strategy = self.config.mm_vision_select_feature
@@ -267,7 +278,7 @@ class LlavaLlamaForCausalLM(nn.Module):
         projector_weights = {
             "model.mm_projector.0": "multi_modal_projector.linear_1",
             "model.mm_projector.2": "multi_modal_projector.linear_2",
-            "model.vision_tower.vision_tower": "vision_tower",  # Update the vision tower weights if we find them in the checkpoint (it may be finetuned).
+            "model.vision_tower.vision_tower": "vision_tower.vision_tower",  # Update the vision tower weights if we find them in the checkpoint (it may be finetuned).
         }
         params_dict = dict(self.named_parameters())
         weights = list(weights)

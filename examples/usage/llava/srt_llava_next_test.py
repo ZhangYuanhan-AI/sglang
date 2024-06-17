@@ -17,8 +17,10 @@ def image_qa(s, image, question):
 
 def single():
     image_url = "https://farm4.staticflickr.com/3175/2653711032_804ff86d81_z.jpg"
-    pil_image, _ = load_image(image_url)
+    pil_image, _, _ = load_image(image_url)
+    # import pdb; pdb.set_trace()
     state = image_qa.run(image=pil_image, question="What is this?", max_new_tokens=512)
+    # import pdb; pdb.set_trace()
     print(state["answer"], "\n")
 
 
@@ -56,16 +58,27 @@ if __name__ == "__main__":
     import multiprocessing as mp
 
     mp.set_start_method("spawn", force=True)
-    runtime = sgl.Runtime(
-        model_path="lmms-lab/llama3-llava-next-8b",
-        tokenizer_path="lmms-lab/llama3-llava-next-8b-tokenizer",
-    )
-    runtime.endpoint.chat_template = get_chat_template("llama-3-instruct")
+    # runtime = sgl.Runtime(
+    #     model_path="lmms-lab/llama3-llava-next-8b",
+    #     tokenizer_path="lmms-lab/llama3-llava-next-8b-tokenizer",
+    # )
+    # runtime.endpoint.chat_template = get_chat_template("llama-3-instruct")
     # runtime = sgl.Runtime(
     #     model_path="lmms-lab/llava-next-72b",
     #     tokenizer_path="lmms-lab/llavanext-qwen-tokenizer",
     # )
     # runtime.endpoint.chat_template = get_chat_template("chatml-llava")
+
+
+    runtime = sgl.Runtime(
+        model_path="/mnt/bn/vl-research/checkpoints/llavanext-google_siglip-so400m-patch14-384-Qwen_Qwen1.5-7B-Chat-mlp2x_gelu-finetune_la1_6mix_fvis_direct32k_anyres_check_toml_trial6",
+        tokenizer_path="lmms-lab/llavanext-qwen-siglip-tokenizer",
+        port=8000
+    )
+    runtime.endpoint.chat_template = get_chat_template("qwen-llava")
+
+
+
     sgl.set_default_backend(runtime)
     print(f"chat template: {runtime.endpoint.chat_template.name}")
 
@@ -77,12 +90,12 @@ if __name__ == "__main__":
     print("\n========== single ==========\n")
     single()
 
-    # Stream output
-    print("\n========== stream ==========\n")
-    stream()
+    # # Stream output
+    # print("\n========== stream ==========\n")
+    # stream()
 
-    # Run a batch of requests
-    print("\n========== batch ==========\n")
-    batch()
+    # # Run a batch of requests
+    # print("\n========== batch ==========\n")
+    # batch()
 
     runtime.shutdown()

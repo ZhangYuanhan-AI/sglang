@@ -141,11 +141,16 @@ def process_anyres_image(image, processor, grid_pinpoints):
     best_resolution = select_best_resolution(image.size, possible_resolutions)
     image_padded = resize_and_pad_image(image, best_resolution)
 
-    patches = divide_to_patches(image_padded, processor.crop_size["height"])
+    # patches = divide_to_patches(image_padded, processor.crop_size["height"])
+    patches = divide_to_patches(image_padded, processor.size["height"]) 
+
+    # image_original_resize = image.resize(
+    #     (processor.size["shortest_edge"], processor.size["shortest_edge"])
+    # )
 
     image_original_resize = image.resize(
-        (processor.size["shortest_edge"], processor.size["shortest_edge"])
-    )
+            (processor.size["height"], processor.size["height"])
+        )
 
     image_patches = [image_original_resize] + patches
     image_patches = [
