@@ -63,6 +63,7 @@ class LlavaBaseForCausalLM(nn.Module):
                 new_image_feature_len = (
                     math.ceil(self.image_size / self.patch_size / 2) ** 2
                 )
+                # new_image_feature_len = 182
             else:
                 new_image_feature_len = self.image_feature_len  # multiimage
 
@@ -125,6 +126,52 @@ class LlavaBaseForCausalLM(nn.Module):
         image_features = self.multi_modal_projector(selected_image_feature)
 
         return image_features
+
+    def get_2dPool(self, image_feature, stride=2):
+        height = width = self.num_patches_per_side
+        # print("image_feature.shape: ", image_feature.shape)
+        num_frames, num_tokens, num_dim = image_feature.shape
+        image_feature = image_feature.view(num_frames, height, width, -1)
+        image_feature = image_feature.permute(0, 3, 1, 2).contiguous()
+        # image_feature = nn.functional.max_pool2d(image_feature, self.config.mm_spatial_pool_stride)
+        print("mm_spatial_pool_mode: ", self.config.mm_spatial_pool_mode)
+        if self.config.mm_spatial_pool_mode == "average":
+            mage_feature = nn.functional.avg_pool2d(image_feature, stride)
+        elif self.config.mm_spatial_pool_mode == "max":
+            image_feature = nn.functional.max_pool2d(image_feature, stride)
+        elif self.config.mm_spatial_pool_mode == "bilinear":
+            height, weight = image_feature.shape[2:]
+            scaled_shape = [math.ceil(height / stride), math.ceil(weight / stride)]
+            image_feature = nn.functional.interpolate(image_feature, size=scaled_shape, mode='bilinear')
+        else:
+            raise ValueError(f"Unexpected mm_spatial_pool_mode: {self.config.mm_spatial_pool_mode}")
+        image_feature = image_feature.permute(0, 2, 3, 1)
+        image_feature = image_feature.view(num_frames, -1, num_dim)
+        return image_feature
+
+    def add_token_per_grid(self, image_feature):
+        resize_h = int(math.sqrt(image_feature.shape[1]))
+        num_frames = image_feature.shape[0]
+        feature_dim = image_feature.shape[-1]
+        # (64, 169, 3584) -> (64, 1, 13, 13, 3584)
+        image_feature = image_feature.view(num_frames, 1, resize_h, resize_h, -1)
+        # (64, 1, 13, 13, 3584) -> (3584, 64, 13, 1, 13)
+        image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
+        # (3584, 64, 13, 1, 13) -> (3584, 64*13, 1*13)
+        image_feature = image_feature.flatten(1, 2).flatten(2, 3)
+        # (3584, 64*13, 1*13) -> (3584, 64*13, 1*13+1)
+        image_feature = torch.cat((image_feature, self.language_model.model.image_newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.device)), dim=-1)
+        # (3584, 64*13, 1*13+1) -> (3584, 64*13*14)
+        # image_feature = image_feature.flatten(1, 2).transpose(0, 1)
+        # (3584, 64*13, 1*13+1) -> (3584, 64, 13*14)
+        image_feature = image_feature.view(feature_dim, -1, resize_h, (resize_h + 1))
+        # print("image_feature.shape: ", image_feature.shape)
+        # (3584, 64, 13, 14) -> (64, 13, 14, 3584)
+        image_feature = image_feature.permute(1, 2, 3, 0).contiguous()
+        # (64, 13, 14, 3584) -> (64, 13*14, 3584)
+        image_feature = image_feature.view(num_frames, -1, feature_dim)
+        # print("image_feature.shape: ", image_feature.shape)
+        return image_feature
 
     @torch.no_grad()
     def forward(
@@ -301,27 +348,44 @@ class LlavaBaseForCausalLM(nn.Module):
                             image_feature = image_feature.unsqueeze(0)
                         else:
                             if modalities_list[image_idx] == "video":  # video
-                                # 2x2 pooling
-                                num_of_frames = image_feature.shape[0]
-                                image_feature = image_feature.view(
-                                    num_of_frames, height, width, -1
-                                )
-                                image_feature = image_feature.permute(
-                                    0, 3, 1, 2
-                                ).contiguous()  # N, C, H, W
-                                height, weight = image_feature.shape[2:]
-                                scaled_shape = [
-                                    math.ceil(height / 2),
-                                    math.ceil(weight / 2),
-                                ]
-                                image_feature = nn.functional.interpolate(
-                                    image_feature, size=scaled_shape, mode="bilinear"
-                                )
-                                image_feature = (
-                                    image_feature.flatten(2)
-                                    .transpose(1, 2)
-                                    .contiguous()
-                                )  # N, C, H*W
+       
+                                
+                                image_feature = self.get_2dPool(image_feature)
+
+                                # print("image_feature.shape: ", image_feature.shape)
+
+
+                                print(self.mm_newline_position)
+                                if self.mm_newline_position == "grid":
+                                    # Grid-wise
+                                    image_feature = self.add_token_per_grid(image_feature)
+                                else:
+                                    image_feature = torch.cat(
+                                        (
+                                            image_feature,
+                                            # Expand to (bs, 1, hidden_dim) and concat at the end of the image tokens
+                                            self.language_model.model.image_newline[
+                                                None, None
+                                            ].expand(
+                                                image_feature.shape[0],
+                                                1,
+                                                image_feature.shape[-1],
+                                            ),
+                                        ),
+                                        dim=1,
+                                    )
+
+                                # elif self.mm_newline_position == "one_token":
+                                    # one-token
+                                # image_feature = image_feature.flatten(0, 1)
+                                # image_feature = torch.cat((
+                                #     image_feature,
+                                #     self.language_model.model.image_newline[None].to(image_feature.device)
+                                # ), dim=0)
+                                # print("#######")
+                                new_image_features.append(image_feature)
+                                continue
+
                             if "unpad" in self.mm_patch_merge_type:
                                 image_feature = torch.cat(
                                     (
@@ -337,7 +401,7 @@ class LlavaBaseForCausalLM(nn.Module):
                                     ),
                                     dim=1,
                                 )
-
+                                # print("image_feature.shape: ", image_feature.shape)
                         new_image_features.append(image_feature)
                     image_features = new_image_features
 
@@ -403,6 +467,7 @@ class LlavaBaseForCausalLM(nn.Module):
         self.mm_patch_merge_type = getattr(self.config, "mm_patch_merge_type", "flat")
         self.image_aspect_ratio = getattr(self.config, "image_aspect_ratio", "square")
         self.image_grid_pinpoints = getattr(self.config, "image_grid_pinpoints", None)
+        self.mm_newline_position = getattr(self.config, "mm_newline_position", "one_token")
 
         self.image_feature_len = int((self.image_size // self.patch_size) ** 2)
         if (

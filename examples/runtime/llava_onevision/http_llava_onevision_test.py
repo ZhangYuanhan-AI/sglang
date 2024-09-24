@@ -146,6 +146,7 @@ def video_stream_request_test(client, video_path):
             sys.stdout.write(content)
             sys.stdout.flush()
     print("-" * 30)
+    return video_response
 
 
 def image_speed_test(client):
@@ -217,17 +218,13 @@ def prepare_video_messages(video_path):
         base64_frames.append(base64_str)
 
     messages = [{"role": "user", "content": []}]
-    frame_format = {
-        "type": "image_url",
-        "image_url": {"url": "data:image/jpeg;base64,{}"},
-        "modalities": "video",
-    }
-
     for base64_frame in base64_frames:
-        frame_format["image_url"]["url"] = "data:image/jpeg;base64,{}".format(
-            base64_frame
-        )
-        messages[0]["content"].append(frame_format.copy())
+        frame_format = {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{base64_frame}"},
+            "modalities": "video",
+        }
+        messages[0]["content"].append(frame_format)
 
     prompt = {"type": "text", "text": "Please describe the video in detail."}
     messages[0]["content"].append(prompt)
@@ -253,14 +250,34 @@ def main():
     url = "https://raw.githubusercontent.com/EvolvingLMMs-Lab/sglang/dev/onevision_local/assets/jobs.mp4"
     cache_dir = os.path.expanduser("~/.cache")
     video_path = download_video(url, cache_dir)
+    # video_path = "/mnt/bn/vl-research/workspace/yhzhang/data/llava_video/seed_videos/Gatech.mp4" # "/mnt/bn/vl-research/workspace/yhzhang/LLaVA-NeXT/playground/demo/xU25MMA2N4aVtYay.mp4"
 
     client = create_openai_client("http://127.0.0.1:30000/v1")
 
     image_stream_request_test(client)
-    multi_image_stream_request_test(client)
+    # multi_image_stream_request_test(client)
+    # save_dict = {}
+    # video_root = "/mnt/bn/vl-research/workspace/yhzhang/data/llava_video/seed_videos/""
+    # video_paths = os.listdir(video_root)
+    # for video_path in video_paths:
+    #     video_path = os.path.join(video_root, video_path)
+    #     if not video_path.endswith(".mp4"):
+    #         continue
+    #     print(video_path)
+    #     response = video_stream_request_test(client, video_path)
+    #     save_dict[video_path] = response
+    
+    # import json
+    # with open("llava_onevision_responses.json", "w") as f:
+    #     json.dump(save_dict, f, indent=4)
+
     video_stream_request_test(client, video_path)
-    image_speed_test(client)
-    video_speed_test(client, video_path)
+    
+
+
+
+    # image_speed_test(client)
+    # video_speed_test(client, video_path)
 
 
 if __name__ == "__main__":
