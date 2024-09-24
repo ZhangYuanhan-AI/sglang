@@ -1,7 +1,7 @@
 """
 Usage:
 
-python3 -m sglang.launch_server --model-path lmms-lab/llava-onevision-qwen2-72b-ov --port=30000 --tp-size=8 --chat-template=chatml-llava
+python3 -m sglang.launch_server --model-path lmms-lab/LLaVA-NeXT-Video-7B-Qwen2 --port=30000 --tp-size=4 --chat-template=chatml-llava
 
 python3 http_llava_onevision_test.py
 """
