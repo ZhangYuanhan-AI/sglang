@@ -87,7 +87,7 @@ def video_speed_test(client, video_path):
 
 
 def prepare_video_messages(video_path):
-    max_frames_num = 64
+    max_frames_num = 32
     vr = VideoReader(video_path, ctx=cpu(0))
     total_frame_num = len(vr)
     video_time = total_frame_num / vr.get_avg_fps()
@@ -144,7 +144,7 @@ def main():
     url = "https://raw.githubusercontent.com/EvolvingLMMs-Lab/sglang/dev/onevision_local/assets/jobs.mp4"
     cache_dir = os.path.expanduser("~/.cache")
     video_path = download_video(url, cache_dir)
-    # video_path="/mnt/bn/vl-research/workspace/yhzhang/LLaVA-NeXT/playground/demo/xU25MMA2N4aVtYay.mp4"
+    # video_path="/mnt/bn/vl-research/data/llava_video/seed_videos/Gatech.mp4"
 
     client = create_openai_client("http://127.0.0.1:30000/v1")
 

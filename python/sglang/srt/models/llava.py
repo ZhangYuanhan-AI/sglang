@@ -215,7 +215,7 @@ class LlavaBaseForCausalLM(nn.Module):
                     concat_images = torch.tensor(
                         np.concatenate(pixel_values, axis=0),
                         device=self.vision_tower.device,
-                    )
+                    ).bfloat16()
                     image_features = self.encode_images(concat_images)
                     split_sizes = [image.shape[0] for image in pixel_values]
                     image_features = torch.split(image_features, split_sizes, dim=0)
@@ -449,11 +449,11 @@ class LlavaBaseForCausalLM(nn.Module):
         vision_path = self.config.mm_vision_tower
         if "clip" in vision_path:
             self.vision_tower = CLIPVisionModel.from_pretrained(
-                vision_path, torch_dtype=torch.float16
+                vision_path, torch_dtype=torch.bfloat16
             ).cuda()
         elif "siglip" in vision_path:
             self.vision_tower = SiglipVisionModel.from_pretrained(
-                vision_path, torch_dtype=torch.float16
+                vision_path, torch_dtype=torch.bfloat16
             ).cuda()
             # Siglip needs all feature tokens
             self.config.mm_vision_select_feature = "full"
@@ -518,11 +518,13 @@ class LlavaLlamaForCausalLM(LlavaBaseForCausalLM):
         self.config.vision_config.hidden_size = config.mm_hidden_size
         self.config.text_config.hidden_size = config.hidden_size
 
-        self.multi_modal_projector = LlavaMultiModalProjector(config)
+        self.multi_modal_projector = LlavaMultiModalProjector(config).dtype(
+            torch.bfloat16
+        )
         self.language_model = LlamaForCausalLM(config, quant_config=quant_config)
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
             self.language_model.model.image_newline = nn.Parameter(
-                torch.empty(config.text_config.hidden_size, dtype=torch.float16)
+                torch.empty(config.text_config.hidden_size, dtype=torch.bfloat16)
             )
 
 
@@ -551,11 +553,13 @@ class LlavaQwenForCausalLM(LlavaBaseForCausalLM):
         if getattr(self.config, "image_token_index", None) is None:
             self.config.image_token_index = 151646
 
-        self.multi_modal_projector = LlavaMultiModalProjector(config)
+        self.multi_modal_projector = LlavaMultiModalProjector(config).type(
+            torch.bfloat16
+        )
         self.language_model = Qwen2ForCausalLM(config, quant_config=quant_config)
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
             self.language_model.model.image_newline = nn.Parameter(
-                torch.empty(config.text_config.hidden_size, dtype=torch.float16)
+                torch.empty(config.text_config.hidden_size, dtype=torch.bfloat16)
             )
 
 
@@ -584,11 +588,13 @@ class LlavaMistralForCausalLM(LlavaBaseForCausalLM):
         if getattr(self.config, "image_token_index", None) is None:
             self.config.image_token_index = 32000
 
-        self.multi_modal_projector = LlavaMultiModalProjector(config)
+        self.multi_modal_projector = LlavaMultiModalProjector(config).dtype(
+            torch.bfloat16
+        )
         self.language_model = MistralForCausalLM(config, quant_config=quant_config)
         if "unpad" in getattr(config, "mm_patch_merge_type", ""):
             self.language_model.model.image_newline = nn.Parameter(
-                torch.empty(config.text_config.hidden_size, dtype=torch.float16)
+                torch.empty(config.text_config.hidden_size, dtype=torch.bfloat16)
             )
 
 
