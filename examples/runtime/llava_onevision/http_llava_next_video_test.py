@@ -97,7 +97,7 @@ def prepare_video_messages(video_path):
     frame_idx = uniform_sampled_frames.tolist()
     frames = vr.get_batch(frame_idx).asnumpy()
 
-    frame_time = [i for i in frame_idx]
+    frame_time = [i/vr.get_avg_fps() for i in frame_idx]
     frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
 
     base64_frames = []
